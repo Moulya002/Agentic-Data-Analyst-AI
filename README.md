@@ -1,9 +1,8 @@
 # Agentic-Data-Analyst-AI
-# 🚀 InsightForge AI – Agentic Data Analyst
 
 ## 🧠 Overview
 
-InsightForge AI is an **agentic AI-powered data analyst** that autonomously analyzes datasets, generates insights, and creates visualizations.
+**Agentic AI-powered data analyst** that autonomously analyzes datasets, generates insights, and creates visualizations.
 
 Unlike traditional dashboards, this system uses a **multi-agent architecture** to plan, execute, and explain data analysis tasks with minimal user input.
 
