@@ -76,3 +76,6 @@ streamlit run app.py
 - LLM calls use Groq Chat Completions.
 - Default model is `llama3-70b-8192`.
 - If API key is missing, fallback behavior handles core workflows where possible.
+Connect with me at:
+Mail: moulyarb02@gmail.com
+LinkedIn: [Moulya R B](https://www.linkedin.com/in/moulyarb/)
