@@ -11,7 +11,6 @@ Production-style multi-agent data analyst with Groq LLM backend (`llama3-70b-819
   - Execution Agent
   - Insight Agent + reflection step
 - Data quality report (missing values, duplicates, anomalies)
-- Generated Python code snippets for transparency
 - Explanation modes (simple / technical)
 - Persistent memory on disk
 - Cross-file join suggestions with apply-join action

@@ -28,8 +28,6 @@ if "auto_visuals" not in st.session_state:
     st.session_state.auto_visuals = []
 if "quality_report" not in st.session_state:
     st.session_state.quality_report = {}
-if "generated_code_blocks" not in st.session_state:
-    st.session_state.generated_code_blocks = []
 if "join_suggestions" not in st.session_state:
     st.session_state.join_suggestions = []
 if "llm_health" not in st.session_state:
@@ -98,8 +96,6 @@ if uploaded_files:
                 )
             quality_result = st.session_state.tools.data_quality_report()
             st.session_state.quality_report = quality_result.quality_report or {}
-            if quality_result.generated_code:
-                st.session_state.generated_code_blocks = [quality_result.generated_code]
         st.success("Load complete.")
 
 if st.session_state.join_suggestions:
@@ -121,8 +117,6 @@ if st.session_state.join_suggestions:
             )
             st.success(join_result.text)
             st.dataframe(join_result.table, use_container_width=True)
-            if join_result.generated_code:
-                st.session_state.generated_code_blocks.append(join_result.generated_code)
 
 if st.session_state.auto_insights:
     st.subheader("Insights")
@@ -155,7 +149,6 @@ if st.session_state.tools.df is not None:
             response = None
         if response is not None:
             st.session_state.chat_log.append({"role": "assistant", "content": response.final_answer, "response_obj": response})
-            st.session_state.generated_code_blocks = response.generated_code_blocks or st.session_state.generated_code_blocks
             st.session_state.quality_report = response.data_quality_report or st.session_state.quality_report
 
     for msg in st.session_state.chat_log:
@@ -179,9 +172,5 @@ if st.session_state.tools.df is not None:
                     if out.plotly_fig is not None:
                         st.plotly_chart(out.plotly_fig, use_container_width=True)
 
-    st.subheader("Generated Code")
-    with st.expander("Show analysis code", expanded=False):
-        for code in st.session_state.generated_code_blocks:
-            st.code(code, language="python")
 else:
     st.info("Upload and load a CSV file to begin.")
