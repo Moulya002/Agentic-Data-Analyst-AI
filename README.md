@@ -1,134 +1,78 @@
-# Agentic-Data-Analyst-AI
+# Agentic Data Analyst AI
 
-## 🧠 Overview
+Production-style multi-agent data analyst with Groq LLM backend (`llama3-70b-8192`), reflection, interactive Plotly charts, and persistent memory.
 
-**Agentic AI-powered data analyst** that autonomously analyzes datasets, generates insights, and creates visualizations.
+## Features
 
-Unlike traditional dashboards, this system uses a **multi-agent architecture** to plan, execute, and explain data analysis tasks with minimal user input.
+- Upload one or multiple CSV files
+- Automatic business insights and visualizations
+- Multi-agent workflow:
+  - Planner Agent
+  - Execution Agent
+  - Insight Agent + reflection step
+- Data quality report (missing values, duplicates, anomalies)
+- Generated Python code snippets for transparency
+- Explanation modes (simple / technical)
+- Persistent memory on disk
+- Cross-file join suggestions with apply-join action
 
----
-
-## 🔥 Key Features
-
-* 📂 Upload CSV datasets
-* 🤖 Multi-agent system:
-
-  * Planner Agent → breaks down tasks
-  * Execution Agent → processes data & generates charts
-  * Insight Agent → explains results in simple language
-* 📊 Automatic data visualization (charts generated dynamically)
-* 🧠 Automatic insight generation (business-level insights)
-* 💬 Chat-based interface for natural language queries
-* 🧹 Handles missing values and data cleaning
-* 📈 Supports trend analysis and comparisons
-
----
-
-## ⚙️ Tech Stack
-
-* **Python**
-* **Streamlit** (UI)
-* **Pandas** (data processing)
-* **Matplotlib / Plotly** (visualizations)
-* **LLMs (OpenAI / LangChain)** (agentic reasoning)
-
----
-
-## 🧠 How It Works
-
-1. User uploads a dataset
-2. Planner Agent analyzes the query and creates a plan
-3. Execution Agent:
-
-   * Cleans data
-   * Runs analysis
-   * Generates charts
-4. Insight Agent converts results into meaningful insights
-5. Output is displayed as:
-
-   * 📊 Visualizations
-   * 🧠 Insights
-   * 💬 Chat responses
-
----
-
-## 📸 Example Capabilities
-
-* “Analyze this dataset and give insights”
-* “Show revenue trends over time”
-* “Top performing products by profit”
-* “Clean the dataset and explain what you did”
-
----
-
-## 🚀 Getting Started
-
-### 1. Clone the repository
+## Project Structure
 
 ```bash
-git clone https://github.com/your-username/agentic-data-analyst-ai.git
-cd agentic-data-analyst-ai
+Agentic Data Analyst/
+├── app.py
+├── agent.py
+├── planner.py
+├── executor.py
+├── insight_agent.py
+├── tools.py
+├── memory.py
+├── requirements.txt
+├── .env.example
+└── utils/
+    ├── config.py
+    ├── llm_client.py
+    ├── logger.py
+    └── retry.py
 ```
 
-### 2. Install dependencies
+## Setup
+
+1) Create and activate virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+2) Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run the app
+3) Configure environment:
+
+```bash
+cp .env.example .env
+```
+
+4) Edit `.env` with your Groq credentials:
+
+- `GROQ_API_KEY=your_groq_api_key_here`
+- `GROQ_MODEL=llama3-70b-8192`
+- `ENABLE_REASONING_TRACE=true`
+- `MAX_MEMORY_MESSAGES=20`
+- `MEMORY_FILE_PATH=.memory/chat_history.json`
+
+5) Run:
 
 ```bash
 streamlit run app.py
 ```
 
----
+## Notes
 
-## 🔑 Environment Setup
-
-If using OpenAI:
-
-* Add your API key in environment variables
-
-Example:
-
-```bash
-export OPENAI_API_KEY=your_api_key_here
-```
-
----
-
-## 📊 Dataset
-
-You can upload any CSV file.
-Recommended:
-
-* Sales datasets
-* Business data
-* Time-series data
-
----
-
-## 💡 Future Improvements
-
-* Multi-dataset support
-* Advanced anomaly detection
-* Real-time data integration
-* Persistent memory across sessions
-* Deployment on cloud platforms
-
----
-
-## 🏆 Resume Highlight
-
-Built an **agentic AI system** using a multi-agent architecture (planner, executor, insight agents) to autonomously analyze datasets, generate visualizations, and produce business insights using LLM-powered reasoning.
-
----
-
-## 📬 Contact
-
-Feel free to connect with me on LinkedIn or reach out for collaboration!
-
----
-
-⭐ If you like this project, consider giving it a star!
+- LLM calls use Groq Chat Completions.
+- Default model is `llama3-70b-8192`.
+- If API key is missing, fallback behavior handles core workflows where possible.
