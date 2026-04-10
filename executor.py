@@ -34,6 +34,14 @@ class ExecutionAgent:
             )
         if step.tool == "data_quality_report":
             return self.tools.data_quality_report()
+        if step.tool == "analysis_profile":
+            return self.tools.analysis_profile()
+        if step.tool == "correlation_heatmap":
+            return self.tools.correlation_heatmap()
+        if step.tool == "generate_pipeline_charts":
+            n = int(step.params.get("max_charts", 3))
+            charts = self.tools.generate_pipeline_charts(max_charts=n)
+            return ToolResult(text=f"Generated {len(charts)} pipeline chart(s).")
         if step.tool == "generate_automatic_visualizations":
             visuals = self.tools.generate_automatic_visualizations()
             # Wrap as a textual result while execution_plan appends visuals separately.
@@ -46,6 +54,8 @@ class ExecutionAgent:
             try:
                 if step.tool == "generate_automatic_visualizations":
                     outputs.extend(self.tools.generate_automatic_visualizations())
+                elif step.tool == "generate_pipeline_charts":
+                    outputs.extend(self.tools.generate_pipeline_charts(max_charts=int(step.params.get("max_charts", 3))))
                 else:
                     outputs.append(self.execute_step(step))
             except Exception as exc:

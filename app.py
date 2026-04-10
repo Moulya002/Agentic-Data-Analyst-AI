@@ -36,11 +36,24 @@ if "llm_health" not in st.session_state:
 with st.sidebar:
     st.header("Configuration")
     st.write("Model:", settings.groq_model)
-    st.write("LLM mode:", "Enabled" if settings.groq_api_key else "Fallback (no API key)")
-    st.caption(
-        "Get a key at [console.groq.com](https://console.groq.com/). "
-        "Set `GROQ_API_KEY` in `.env` (starts with `gsk_`)."
-    )
+    if not settings.use_llm:
+        st.info("**LLM off** — `USE_LLM=false`. All analysis uses local rules (no API calls).")
+    elif settings.llm_enabled:
+        st.success("**LLM on** — Groq will be used for planning and wording.")
+    else:
+        st.warning(
+            "**LLM unavailable** — missing or placeholder `GROQ_API_KEY`. "
+            "App runs in **offline mode** (same as no LLM)."
+        )
+    with st.expander("If Groq / API keys fail"):
+        st.markdown(
+            """
+1. Create a key at [console.groq.com](https://console.groq.com/) (starts with `gsk_`).
+2. Put it only in **`.env`**: `GROQ_API_KEY=gsk_...` (no quotes, no spaces).
+3. **Restart** Streamlit after editing `.env`.
+4. Or set **`USE_LLM=false`** in `.env` to skip the API entirely.
+            """
+        )
     show_reasoning = st.toggle("Show agent reasoning", value=settings.enable_reasoning_trace)
     explanation_mode = st.radio(
         "Explanation mode",
@@ -148,7 +161,9 @@ if st.session_state.tools.df is not None:
             st.error(f"Could not process request with the LLM backend. Please verify GROQ_API_KEY and try again. Details: {exc}")
             response = None
         if response is not None:
-            st.session_state.chat_log.append({"role": "assistant", "content": response.final_answer, "response_obj": response})
+            st.session_state.chat_log.append(
+                {"role": "assistant", "content": response.refined_answer, "response_obj": response}
+            )
             st.session_state.quality_report = response.data_quality_report or st.session_state.quality_report
 
     for msg in st.session_state.chat_log:
@@ -159,8 +174,6 @@ if st.session_state.tools.df is not None:
                 response_obj = msg["response_obj"]
                 with st.expander("Planned workflow", expanded=False):
                     st.text(response_obj.plan_summary or "Plan not available.")
-                with st.expander("Refined output (self-reflection)", expanded=False):
-                    st.markdown(response_obj.refined_answer)
                 if show_reasoning:
                     with st.expander("Agent reasoning steps"):
                         for i, step in enumerate(response_obj.steps, start=1):

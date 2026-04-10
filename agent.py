@@ -37,7 +37,12 @@ class AgenticDataAnalyst:
     def run(self, user_query: str, explanation_mode: str = "simple") -> AgentResponse:
         self.memory.add("user", user_query)
         df = self.tools.ensure_data()
-        steps = self.planner.plan(user_query, list(df.columns), self.memory.recent())
+        steps = self.planner.plan(
+            user_query,
+            list(df.columns),
+            self.memory.recent(),
+            column_dtypes={c: str(df[c].dtype) for c in df.columns},
+        )
         outputs = self.executor.execute_plan(steps)
         initial_answer = self.insight_agent.summarize(user_query, steps, outputs, mode=explanation_mode)
         refined_answer = self.insight_agent.reflect_and_refine(
@@ -69,7 +74,11 @@ class AgenticDataAnalyst:
             explanation_mode="simple",
         )
         lines = [line.strip("- ").strip() for line in response.refined_answer.splitlines() if line.strip()]
-        bullets = [line for line in lines if len(line) > 20][:6]
+        bullets = [
+            line
+            for line in lines
+            if len(line) > 20 and not line.lower().startswith("query:")
+        ][:6]
         return bullets or [response.refined_answer]
 
     def generate_automatic_visualizations(self) -> List[ToolResult]:

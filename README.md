@@ -56,9 +56,10 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-4) Edit `.env` with your Groq credentials:
+4) Edit `.env`:
 
-- `GROQ_API_KEY=your_groq_api_key_here`
+- `USE_LLM=true` — set to `false` to run **without** Groq (local rules only; no API key needed).
+- `GROQ_API_KEY=your_groq_api_key_here` — real key from [console.groq.com](https://console.groq.com/) (`gsk_...`).
 - `GROQ_MODEL=llama3-70b-8192`
 - `ENABLE_REASONING_TRACE=true`
 - `MAX_MEMORY_MESSAGES=20`
@@ -72,9 +73,8 @@ streamlit run app.py
 
 ## Notes
 
-- LLM calls use Groq Chat Completions.
-- Default model is `llama3-70b-8192`.
-- If API key is missing, fallback behavior handles core workflows where possible.
+- With a valid key, the app uses Groq Chat Completions (`llama3-70b-8192` by default).
+- With `USE_LLM=false` or an invalid/placeholder key, the app still runs using **offline** planning and template insights.
 Connect with me at:
 Mail: moulyarb02@gmail.com
 LinkedIn: [Moulya R B](https://www.linkedin.com/in/moulyarb/)

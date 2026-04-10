@@ -12,7 +12,7 @@ from utils.config import settings
 class GroqLLM:
     def __init__(self):
         self.client: Optional[Groq] = None
-        if settings.groq_api_key:
+        if settings.llm_enabled and settings.groq_api_key:
             self.client = Groq(api_key=settings.groq_api_key)
 
     @property
@@ -50,7 +50,11 @@ class GroqLLM:
         Lightweight connectivity test with latency.
         """
         if self.client is None:
-            return {"ok": False, "error": "GROQ_API_KEY not configured.", "latency_ms": None}
+            if not settings.use_llm:
+                return {"ok": False, "error": "LLM disabled (USE_LLM=false).", "latency_ms": None}
+            if not settings.groq_api_key:
+                return {"ok": False, "error": "GROQ_API_KEY not set.", "latency_ms": None}
+            return {"ok": False, "error": "GROQ_API_KEY is missing or looks like a placeholder.", "latency_ms": None}
         start = time.perf_counter()
         try:
             response = self.client.chat.completions.create(

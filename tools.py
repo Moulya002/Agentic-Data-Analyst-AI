@@ -4,6 +4,31 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def quality_summary_text(quality: Dict[str, Any]) -> str:
+    """One readable paragraph for UI + exports from a quality_report dict."""
+    rows = int(quality.get("rows", 0) or 0)
+    cols = int(quality.get("columns", 0) or 0)
+    dups = int(quality.get("duplicate_rows", 0) or 0)
+    miss = int(quality.get("total_missing_cells", 0) or 0)
+    parts = [
+        f"Dataset has {rows:,} rows and {cols} columns.",
+        f"Duplicate rows: {dups:,}.",
+        f"Missing values (cells): {miss:,}.",
+    ]
+    anomalies = quality.get("anomalies") or []
+    if anomalies:
+        parts.append("IQR-based outliers: " + "; ".join(anomalies[:6]) + (" …" if len(anomalies) > 6 else "") + ".")
+    mb = quality.get("missing_by_column") or {}
+    if isinstance(mb, dict) and mb:
+        worst = sorted(mb.items(), key=lambda x: -int(x[1] or 0))[:5]
+        parts.append(
+            "Columns with the most missing: "
+            + ", ".join(f"{k} ({int(v)})" for k, v in worst)
+            + "."
+        )
+    return " ".join(parts)
+
 import duckdb
 import numpy as np
 import pandas as pd
@@ -266,8 +291,12 @@ class DataTools:
                 "missing_count": list(missing_per_col.values),
             }
         )
+        dtype_df = pd.DataFrame({"column": df.columns, "dtype": df.dtypes.astype(str).values})
+        quality_table = quality_table.merge(dtype_df, on="column", how="left")
+        quality_table = quality_table[["column", "dtype", "missing_count"]]
+
         return ToolResult(
-            text="Data quality report generated.",
+            text=quality_summary_text(quality),
             table=quality_table,
             quality_report=quality,
             generated_code=(
@@ -276,6 +305,133 @@ class DataTools:
                 "# IQR-based outlier scan on numeric columns"
             ),
         )
+
+    def analysis_profile(self) -> ToolResult:
+        """Aggregations, describe stats, and top correlations (Analysis Agent)."""
+        df = self.ensure_data()
+        lines: List[str] = ["Analysis profile (pandas):"]
+        num = df.select_dtypes(include=[np.number])
+        table_parts: List[pd.DataFrame] = []
+
+        if num.empty:
+            lines.append("No numeric columns for correlation or describe().")
+        else:
+            desc = num.describe().T.round(4)
+            table_parts.append(desc.reset_index().rename(columns={"index": "column"}))
+            lines.append(f"- Numeric columns: {len(num.columns)}; rows used: {num.dropna(how='all').shape[0]}")
+
+            if len(num.columns) >= 2:
+                corr = num.corr(numeric_only=True)
+                pairs: List[Tuple[str, str, float]] = []
+                ccols = corr.columns.tolist()
+                for i in range(len(ccols)):
+                    for j in range(i + 1, len(ccols)):
+                        v = corr.iloc[i, j]
+                        if pd.notna(v):
+                            pairs.append((ccols[i], ccols[j], float(v)))
+                pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+                top = pairs[:6]
+                lines.append(
+                    "- Strongest correlations: "
+                    + "; ".join([f"{a} ↔ {b} ({v:.2f})" for a, b, v in top])
+                )
+
+        cat_cols = [c for c in df.columns if c not in num.columns]
+        if cat_cols:
+            lines.append(f"- Non-numeric columns ({len(cat_cols)}): {', '.join(cat_cols[:8])}{'…' if len(cat_cols) > 8 else ''}")
+
+        summary_table = table_parts[0] if table_parts else pd.DataFrame({"note": ["No numeric describe available"]})
+        return ToolResult(text="\n".join(lines), table=summary_table)
+
+    def correlation_heatmap(self) -> ToolResult:
+        """Plotly heatmap of numeric correlations."""
+        df = self.ensure_data()
+        num = df.select_dtypes(include=[np.number])
+        if num.shape[1] < 2:
+            return ToolResult(text="Need at least two numeric columns for a correlation heatmap.")
+        corr = num.corr(numeric_only=True)
+        fig = px.imshow(
+            corr,
+            text_auto=".2f",
+            aspect="auto",
+            title="Correlation heatmap (numeric features)",
+            color_continuous_scale="RdBu_r",
+            zmin=-1,
+            zmax=1,
+        )
+        fig.update_layout(margin=dict(l=40, r=40, t=50, b=40))
+        return ToolResult(text="Correlation heatmap generated.", plotly_fig=fig)
+
+    def generate_pipeline_charts(self, max_charts: int = 3) -> List[ToolResult]:
+        """
+        Auto-select 2–3 charts: heatmap (if possible), trend, top categories, or histogram.
+        """
+        df = self.ensure_data()
+        outputs: List[ToolResult] = []
+        max_charts = max(1, min(max_charts, 6))
+
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        object_cols = df.select_dtypes(exclude=[np.number]).columns.tolist()
+
+        datetime_col = None
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                datetime_col = col
+                break
+            if df[col].dtype == object:
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                if parsed.notna().mean() > 0.7:
+                    datetime_col = col
+                    break
+
+        def add(result: ToolResult) -> None:
+            if len(outputs) >= max_charts:
+                return
+            outputs.append(result)
+
+        if len(numeric_cols) >= 2:
+            add(self.correlation_heatmap())
+
+        if datetime_col and numeric_cols and len(outputs) < max_charts:
+            trend_col = numeric_cols[0]
+            tmp = df.copy()
+            tmp[datetime_col] = pd.to_datetime(tmp[datetime_col], errors="coerce")
+            tmp = tmp.dropna(subset=[datetime_col, trend_col])
+            if not tmp.empty:
+                monthly = (
+                    tmp.groupby(tmp[datetime_col].dt.to_period("M"))[trend_col]
+                    .mean()
+                    .reset_index()
+                )
+                monthly[datetime_col] = monthly[datetime_col].astype(str)
+                fig = px.line(
+                    monthly,
+                    x=datetime_col,
+                    y=trend_col,
+                    markers=True,
+                    title=f"Trend: {trend_col} over time",
+                )
+                add(ToolResult(text=f"Line chart: `{trend_col}` vs time.", plotly_fig=fig))
+
+        if object_cols and numeric_cols and len(outputs) < max_charts:
+            category_col = min(object_cols, key=lambda c: df[c].nunique(dropna=True))
+            metric_col = numeric_cols[0]
+            grouped = (
+                df.groupby(category_col, dropna=False)[metric_col]
+                .sum(min_count=1)
+                .reset_index()
+                .sort_values(metric_col, ascending=False)
+                .head(12)
+            )
+            fig = px.bar(grouped, x=category_col, y=metric_col, title=f"Top `{category_col}` by `{metric_col}`")
+            add(ToolResult(text=f"Bar chart: top `{category_col}`.", plotly_fig=fig))
+
+        if numeric_cols and len(outputs) < max_charts:
+            target_col = numeric_cols[0]
+            fig = px.histogram(df, x=target_col, nbins=30, title=f"Distribution: {target_col}")
+            add(ToolResult(text=f"Histogram: `{target_col}`.", plotly_fig=fig))
+
+        return outputs if outputs else [ToolResult(text="No charts generated (insufficient column types).")]
 
     def generate_automatic_visualizations(self) -> List[ToolResult]:
         """
