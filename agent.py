@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -100,6 +100,21 @@ class AgenticDataAnalyst:
         insights = self.generate_automatic_insights()
         charts = self.generate_automatic_visualizations()
         return insights, charts
+
+    def run_full_analysis(self) -> Tuple[List[str], List[ToolResult], Dict[str, object], List[str]]:
+        """
+        One-click: clean → quality snapshot → auto insights → charts → business recommendations.
+        """
+        self.tools.ensure_data()
+        self.tools.clean_data()
+        q = self.tools.data_quality_report()
+        insights = self.generate_automatic_insights()
+        charts = self.generate_automatic_visualizations()
+        recs = self.insight_agent.business_recommendations(insights, q.quality_report or {})
+        return insights, charts, q.quality_report or {}, recs
+
+    def business_recommendations(self, insights: List[str], quality_report: Optional[Dict[str, object]] = None) -> List[str]:
+        return self.insight_agent.business_recommendations(insights, quality_report or {})
 
     def _build_plan_summary(self, steps: List[AgentStep]) -> str:
         lines = ["Plan:"]

@@ -1,0 +1,10 @@
+[theme]
+base = "dark"
+primaryColor = "#58a6ff"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#161b22"
+textColor = "#e6edf3"
+font = "sans serif"
+
+# Leave headless unset (false) locally so Streamlit opens your default browser.
+# For Docker/CI, run: streamlit run app.py --server.headless true

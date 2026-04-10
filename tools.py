@@ -4,35 +4,46 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
-
-def quality_summary_text(quality: Dict[str, Any]) -> str:
-    """One readable paragraph for UI + exports from a quality_report dict."""
-    rows = int(quality.get("rows", 0) or 0)
-    cols = int(quality.get("columns", 0) or 0)
-    dups = int(quality.get("duplicate_rows", 0) or 0)
-    miss = int(quality.get("total_missing_cells", 0) or 0)
-    parts = [
-        f"Dataset has {rows:,} rows and {cols} columns.",
-        f"Duplicate rows: {dups:,}.",
-        f"Missing values (cells): {miss:,}.",
-    ]
-    anomalies = quality.get("anomalies") or []
-    if anomalies:
-        parts.append("IQR-based outliers: " + "; ".join(anomalies[:6]) + (" …" if len(anomalies) > 6 else "") + ".")
-    mb = quality.get("missing_by_column") or {}
-    if isinstance(mb, dict) and mb:
-        worst = sorted(mb.items(), key=lambda x: -int(x[1] or 0))[:5]
-        parts.append(
-            "Columns with the most missing: "
-            + ", ".join(f"{k} ({int(v)})" for k, v in worst)
-            + "."
-        )
-    return " ".join(parts)
-
 import duckdb
 import numpy as np
 import pandas as pd
 import plotly.express as px
+
+from utils.chart_theme import human_axis_label, style_plotly_figure
+
+
+def quality_summary_text(quality: Dict[str, Any]) -> str:
+    """One readable paragraph for UI + exports from a quality_report dict (analyst tone)."""
+    rows = int(quality.get("rows", 0) or 0)
+    cols = int(quality.get("columns", 0) or 0)
+    dups = int(quality.get("duplicate_rows", 0) or 0)
+    miss = int(quality.get("total_missing_cells", 0) or 0)
+    total_cells = max(1, rows * cols)
+    miss_pct = 100.0 * miss / total_cells
+    parts = [
+        f"You are working with **{rows:,} rows** and **{cols} columns**.",
+        f"About **{miss_pct:.1f}%** of all cells are empty ({miss:,} missing cells).",
+    ]
+    if rows > 0:
+        dup_pct = 100.0 * dups / rows
+        parts.append(f"**{dups:,} duplicate rows** (~{dup_pct:.1f}% of rows) — worth deduplicating before KPIs.")
+    anomalies = quality.get("anomalies") or []
+    if anomalies:
+        parts.append(
+            "**Outliers (IQR rule) show up in:** "
+            + "; ".join(anomalies[:6])
+            + (" …" if len(anomalies) > 6 else "")
+            + " — investigate before treating them as errors."
+        )
+    mb = quality.get("missing_by_column") or {}
+    if isinstance(mb, dict) and mb:
+        worst = sorted(mb.items(), key=lambda x: -int(x[1] or 0))[:3]
+        worst_txt = []
+        for k, v in worst:
+            col_pct = 100.0 * int(v) / max(1, rows)
+            worst_txt.append(f"`{k}` (~{col_pct:.0f}% of rows affected, {int(v)} cells)")
+        parts.append("**Missing values concentrate in:** " + ", ".join(worst_txt) + ".")
+    return " ".join(parts)
 
 
 @dataclass
@@ -177,12 +188,13 @@ class DataTools:
             "duplicates": int(df.duplicated().sum()),
         }
         dtype_df = pd.DataFrame({"column": df.columns, "dtype": df.dtypes.astype(str).values})
+        miss_pct = 100.0 * summary["missing_values"] / max(1, summary["rows"] * summary["columns"])
+        dup_pct = 100.0 * summary["duplicates"] / max(1, summary["rows"])
         text = (
-            "Dataset summary complete.\n"
-            f"- Rows: {summary['rows']}\n"
-            f"- Columns: {summary['columns']}\n"
-            f"- Missing values: {summary['missing_values']}\n"
-            f"- Duplicate rows: {summary['duplicates']}"
+            f"**Scale:** {summary['rows']:,} records × {summary['columns']} fields.\n"
+            f"**Data hygiene:** {summary['missing_values']:,} empty cells overall (~{miss_pct:.1f}% of the grid); "
+            f"{summary['duplicates']:,} full duplicate rows (~{dup_pct:.1f}% of rows).\n"
+            "**Implication:** clean before revenue or funnel metrics so totals stay credible."
         )
         return ToolResult(
             text=text,
@@ -204,11 +216,12 @@ class DataTools:
 
         missing_after = int(df.isna().sum().sum())
         self.df = df
+        dup_pct = 100.0 * duplicates / max(1, original_rows)
+        filled = missing_before - missing_after
         text = (
-            "Basic cleaning complete.\n"
-            f"- Dropped duplicates: {duplicates}\n"
-            f"- Rows before/after: {original_rows}/{len(df)}\n"
-            f"- Missing before/after: {missing_before}/{missing_after}"
+            f"**Deduplication:** removed **{duplicates}** repeat row(s) (~{dup_pct:.1f}% of the file).\n"
+            f"**Imputation:** filled **{filled:,}** missing cells (numeric → median; text → “Unknown”).\n"
+            f"**Resulting table:** **{len(df):,}** rows; **{missing_after:,}** cells still empty (if any, likely structural gaps)."
         )
         return ToolResult(
             text=text,
@@ -228,7 +241,7 @@ class DataTools:
         con.register("df", df)
         result = con.execute(query).df()
         return ToolResult(
-            text=f"SQL query executed. Returned {len(result)} rows.",
+            text=f"**Query result:** **{len(result)}** row(s) returned — use the table below for the exact figures.",
             table=result.head(100),
             generated_code=f"result = duckdb.sql(\"\"\"{query}\"\"\").df()",
         )
@@ -242,17 +255,42 @@ class DataTools:
 
         chart_type = chart_type.lower()
         if chart_type == "scatter" and y_col:
-            fig = px.scatter(df, x=x_col, y=y_col, title=f"Scatter: {x_col} vs {y_col}")
+            fig = px.scatter(df, x=x_col, y=y_col, title=f"{human_axis_label(x_col)} vs {human_axis_label(y_col)}")
+            style_plotly_figure(
+                fig,
+                title=f"{human_axis_label(x_col)} vs {human_axis_label(y_col)}",
+                x_title=human_axis_label(x_col),
+                y_title=human_axis_label(y_col),
+            )
         elif chart_type == "line" and y_col:
-            fig = px.line(df, x=x_col, y=y_col, title=f"Line: {x_col} vs {y_col}")
+            fig = px.line(df, x=x_col, y=y_col, title=f"Trend: {human_axis_label(y_col)}")
+            style_plotly_figure(
+                fig,
+                title=f"Trend: {human_axis_label(y_col)} over {human_axis_label(x_col)}",
+                x_title=human_axis_label(x_col),
+                y_title=human_axis_label(y_col),
+            )
         elif chart_type == "bar":
-            fig = px.bar(df, x=x_col, y=y_col, title=f"Bar: {x_col}" + (f" vs {y_col}" if y_col else ""))
+            fig = px.bar(df, x=x_col, y=y_col, title=f"{human_axis_label(x_col)} breakdown")
+            y_lab = human_axis_label(y_col) if y_col else "Count"
+            style_plotly_figure(
+                fig,
+                title=f"{human_axis_label(x_col)}" + (f" by {human_axis_label(y_col)}" if y_col else ""),
+                x_title=human_axis_label(x_col),
+                y_title=y_lab,
+            )
         else:
-            fig = px.histogram(df, x=x_col, title=f"Histogram: {x_col}")
+            fig = px.histogram(df, x=x_col, nbins=30, title=f"Distribution of {human_axis_label(x_col)}")
+            style_plotly_figure(
+                fig,
+                title=f"Distribution of {human_axis_label(x_col)}",
+                x_title=human_axis_label(x_col),
+                y_title="Frequency",
+            )
         chart_fn = chart_type if chart_type in ["line", "bar", "scatter", "histogram"] else "histogram"
         y_part = f", y='{y_col}'" if y_col else ""
         return ToolResult(
-            text=f"Generated {chart_type} chart.",
+            text=f"**Chart:** {chart_type} for `{x_col}`" + (f" vs `{y_col}`" if y_col else "") + " — see interactive view below.",
             plotly_fig=fig,
             generated_code=f"fig = px.{chart_fn}(df, x='{x_col}'{y_part})",
         )
@@ -309,16 +347,18 @@ class DataTools:
     def analysis_profile(self) -> ToolResult:
         """Aggregations, describe stats, and top correlations (Analysis Agent)."""
         df = self.ensure_data()
-        lines: List[str] = ["Analysis profile (pandas):"]
+        lines: List[str] = ["**Numeric deep-dive (for planning and storytelling):**"]
         num = df.select_dtypes(include=[np.number])
         table_parts: List[pd.DataFrame] = []
 
         if num.empty:
-            lines.append("No numeric columns for correlation or describe().")
+            lines.append("There are **no numeric KPI columns** here — focus on segment counts or encode categories before correlation work.")
         else:
             desc = num.describe().T.round(4)
             table_parts.append(desc.reset_index().rename(columns={"index": "column"}))
-            lines.append(f"- Numeric columns: {len(num.columns)}; rows used: {num.dropna(how='all').shape[0]}")
+            lines.append(
+                f"**{len(num.columns)} numeric field(s)** drive aggregates; the stats table shows typical level, spread, and extremes."
+            )
 
             if len(num.columns) >= 2:
                 corr = num.corr(numeric_only=True)
@@ -330,15 +370,19 @@ class DataTools:
                         if pd.notna(v):
                             pairs.append((ccols[i], ccols[j], float(v)))
                 pairs.sort(key=lambda x: abs(x[2]), reverse=True)
-                top = pairs[:6]
-                lines.append(
-                    "- Strongest correlations: "
-                    + "; ".join([f"{a} ↔ {b} ({v:.2f})" for a, b, v in top])
-                )
+                top = pairs[:4]
+                if top:
+                    human = []
+                    for a, b, v in top:
+                        strength = "strong" if abs(v) >= 0.6 else "moderate" if abs(v) >= 0.35 else "weak"
+                        human.append(f"`{a}` and `{b}` move together ({strength} link, r≈{v:+.2f})")
+                    lines.append("**Relationships:** " + "; ".join(human) + ".")
 
         cat_cols = [c for c in df.columns if c not in num.columns]
         if cat_cols:
-            lines.append(f"- Non-numeric columns ({len(cat_cols)}): {', '.join(cat_cols[:8])}{'…' if len(cat_cols) > 8 else ''}")
+            preview = ", ".join(f"`{c}`" for c in cat_cols[:8])
+            tail = " …" if len(cat_cols) > 8 else ""
+            lines.append(f"**Segmentation dimensions ({len(cat_cols)}):** {preview}{tail} — use these for breakdowns and bar charts.")
 
         summary_table = table_parts[0] if table_parts else pd.DataFrame({"note": ["No numeric describe available"]})
         return ToolResult(text="\n".join(lines), table=summary_table)
@@ -348,19 +392,24 @@ class DataTools:
         df = self.ensure_data()
         num = df.select_dtypes(include=[np.number])
         if num.shape[1] < 2:
-            return ToolResult(text="Need at least two numeric columns for a correlation heatmap.")
+            return ToolResult(text="Need at least two numeric columns to compare how KPIs move together.")
         corr = num.corr(numeric_only=True)
         fig = px.imshow(
             corr,
             text_auto=".2f",
             aspect="auto",
-            title="Correlation heatmap (numeric features)",
+            title="How numeric KPIs correlate",
             color_continuous_scale="RdBu_r",
             zmin=-1,
             zmax=1,
+            labels=dict(x="Metric", y="Metric", color="Correlation"),
         )
-        fig.update_layout(margin=dict(l=40, r=40, t=50, b=40))
-        return ToolResult(text="Correlation heatmap generated.", plotly_fig=fig)
+        style_plotly_figure(fig, title="How numeric KPIs correlate (darker red = stronger positive)")
+        fig.update_xaxes(side="bottom")
+        return ToolResult(
+            text="**Heatmap:** warmer cells mean two metrics rise/fall together; cooler blues mean they oppose — use this to prioritize joint drivers.",
+            plotly_fig=fig,
+        )
 
     def generate_pipeline_charts(self, max_charts: int = 3) -> List[ToolResult]:
         """
@@ -409,9 +458,20 @@ class DataTools:
                     x=datetime_col,
                     y=trend_col,
                     markers=True,
-                    title=f"Trend: {trend_col} over time",
+                    title=f"Trend: {human_axis_label(trend_col)}",
                 )
-                add(ToolResult(text=f"Line chart: `{trend_col}` vs time.", plotly_fig=fig))
+                style_plotly_figure(
+                    fig,
+                    title=f"Average {human_axis_label(trend_col)} over time",
+                    x_title=human_axis_label(datetime_col),
+                    y_title=human_axis_label(trend_col),
+                )
+                add(
+                    ToolResult(
+                        text=f"**Trend:** `{trend_col}` smoothed by period — use this to spot growth or slowdowns.",
+                        plotly_fig=fig,
+                    )
+                )
 
         if object_cols and numeric_cols and len(outputs) < max_charts:
             category_col = min(object_cols, key=lambda c: df[c].nunique(dropna=True))
@@ -423,13 +483,40 @@ class DataTools:
                 .sort_values(metric_col, ascending=False)
                 .head(12)
             )
-            fig = px.bar(grouped, x=category_col, y=metric_col, title=f"Top `{category_col}` by `{metric_col}`")
-            add(ToolResult(text=f"Bar chart: top `{category_col}`.", plotly_fig=fig))
+            fig = px.bar(
+                grouped,
+                x=category_col,
+                y=metric_col,
+                title=f"Top {human_axis_label(category_col)} by {human_axis_label(metric_col)}",
+            )
+            style_plotly_figure(
+                fig,
+                title=f"Where {human_axis_label(metric_col)} concentrates",
+                x_title=human_axis_label(category_col),
+                y_title=human_axis_label(metric_col),
+            )
+            add(
+                ToolResult(
+                    text=f"**Concentration:** `{metric_col}` is stacked into a few `{category_col}` values — the tall bars are your priority segments.",
+                    plotly_fig=fig,
+                )
+            )
 
         if numeric_cols and len(outputs) < max_charts:
             target_col = numeric_cols[0]
-            fig = px.histogram(df, x=target_col, nbins=30, title=f"Distribution: {target_col}")
-            add(ToolResult(text=f"Histogram: `{target_col}`.", plotly_fig=fig))
+            fig = px.histogram(df, x=target_col, nbins=30, title=f"Distribution of {human_axis_label(target_col)}")
+            style_plotly_figure(
+                fig,
+                title=f"Distribution of {human_axis_label(target_col)}",
+                x_title=human_axis_label(target_col),
+                y_title="Count",
+            )
+            add(
+                ToolResult(
+                    text=f"**Shape:** `{target_col}` distribution — long tails or skew hint at discounting, caps, or data entry quirks.",
+                    plotly_fig=fig,
+                )
+            )
 
         return outputs if outputs else [ToolResult(text="No charts generated (insufficient column types).")]
 
@@ -474,9 +561,20 @@ class DataTools:
                     x=datetime_col,
                     y=trend_col,
                     markers=True,
-                    title=f"Trend Over Time: {trend_col}",
+                    title=f"Trend: {human_axis_label(trend_col)}",
                 )
-                outputs.append(ToolResult(text=f"Auto-chart: trend of `{trend_col}` over time.", plotly_fig=fig))
+                style_plotly_figure(
+                    fig,
+                    title=f"{human_axis_label(trend_col)} over time",
+                    x_title=human_axis_label(datetime_col),
+                    y_title=human_axis_label(trend_col),
+                )
+                outputs.append(
+                    ToolResult(
+                        text=f"**Trend signal:** `{trend_col}` over `{datetime_col}` — read slope and dips for seasonality or risk.",
+                        plotly_fig=fig,
+                    )
+                )
 
         # 2) Top category performers (if possible).
         if object_cols and numeric_cols:
@@ -493,9 +591,20 @@ class DataTools:
                 grouped,
                 x=category_col,
                 y=metric_col,
-                title=f"Top Categories by {metric_col}",
+                title=f"Top {human_axis_label(category_col)} by {human_axis_label(metric_col)}",
             )
-            outputs.append(ToolResult(text=f"Auto-chart: top `{category_col}` by `{metric_col}`.", plotly_fig=fig))
+            style_plotly_figure(
+                fig,
+                title=f"{human_axis_label(metric_col)} by {human_axis_label(category_col)}",
+                x_title=human_axis_label(category_col),
+                y_title=human_axis_label(metric_col),
+            )
+            outputs.append(
+                ToolResult(
+                    text=f"**Share of performance:** `{category_col}` drives `{metric_col}` — focus on the tallest bars first.",
+                    plotly_fig=fig,
+                )
+            )
 
         # 3) Missing values profile.
         missing_df = df.isna().sum().reset_index()
@@ -506,14 +615,36 @@ class DataTools:
                 missing_df,
                 x="column",
                 y="missing_count",
-                title="Missing Values by Column",
+                title="Missing values by column",
             )
-            outputs.append(ToolResult(text="Auto-chart: missing-value hotspots.", plotly_fig=fig))
+            style_plotly_figure(
+                fig,
+                title="Where data is missing most",
+                x_title="Column",
+                y_title="Missing cells",
+            )
+            outputs.append(
+                ToolResult(
+                    text="**Data risk:** columns with the most gaps — fix these before forecasting or margin analysis.",
+                    plotly_fig=fig,
+                )
+            )
 
         # 4) Numeric distribution using histogram.
         if numeric_cols:
             target_col = numeric_cols[0]
-            fig = px.histogram(df, x=target_col, nbins=30, title=f"Histogram: {target_col}")
-            outputs.append(ToolResult(text=f"Auto-chart: histogram distribution for `{target_col}`.", plotly_fig=fig))
+            fig = px.histogram(df, x=target_col, nbins=30, title=f"Distribution of {human_axis_label(target_col)}")
+            style_plotly_figure(
+                fig,
+                title=f"Distribution of {human_axis_label(target_col)}",
+                x_title=human_axis_label(target_col),
+                y_title="Frequency",
+            )
+            outputs.append(
+                ToolResult(
+                    text=f"**Distribution:** `{target_col}` — check for skew, caps, or outliers that distort averages.",
+                    plotly_fig=fig,
+                )
+            )
 
         return outputs

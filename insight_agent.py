@@ -55,11 +55,12 @@ class InsightAgent:
         }
         return self.llm.chat_json(
             system_prompt=(
-                "You are an insight agent. The user asked a specific question in the 'query' field. "
-                "Answer THAT question directly using the tool results (numbers, tables, summaries). "
-                "If the tools only partially answer the question, say what is missing and suggest one next step. "
-                "If mode is simple, use plain language; if technical, include metrics, column names, and tool names. "
-                "Do not give a generic dataset essay — tie sentences to the user's question."
+                "You are a senior data analyst speaking to a business stakeholder. "
+                "Answer the user's question using the tool results (numbers, column names, risks). "
+                "Write like narrative bullets, not system logs — never say phrases like "
+                "'Dataset summary complete', 'SQL query executed', or 'report generated'. "
+                "If mode is simple, plain English; if technical, add metrics and method hints. "
+                "Stay anchored to the user's question; no generic filler essay."
             ),
             user_payload=payload,
             temperature=0.3,
@@ -91,8 +92,8 @@ class InsightAgent:
                 "mode": mode,
                 "task": (
                     "Return ONLY a JSON array of 4 to 6 strings. "
-                    "Each string is one business insight (no numbering prefix). "
-                    "If mode is technical, include metrics and column names where helpful."
+                    "Each string sounds like a real analyst (e.g. 'Revenue concentrates in …', 'West region is softening …'). "
+                    "No robotic status text. If mode is technical, add metrics and column names."
                 ),
             }
             raw = self.llm.chat_json(
@@ -179,6 +180,78 @@ class InsightAgent:
         while len(unique) < 4:
             unique.append("Explore correlations and segment-level cuts in chat for deeper validation.")
         return unique[:8]
+
+    def business_recommendations(
+        self,
+        insights: List[str],
+        quality_report: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
+        """
+        3–5 actionable recommendations for portfolio / demo (LLM when available).
+        """
+        quality_report = quality_report or {}
+        recs: List[str] = []
+
+        rows = int(quality_report.get("rows", 0) or 0)
+        mb = quality_report.get("missing_by_column") or {}
+        if isinstance(mb, dict) and mb and rows > 0:
+            worst = max(mb.items(), key=lambda x: int(x[1] or 0))
+            col, cnt = worst[0], int(worst[1] or 0)
+            pct = 100.0 * cnt / max(1, rows)
+            if cnt > 0:
+                recs.append(
+                    f"Prioritize fixing or imputing **`{col}`** — it has the largest missing footprint "
+                    f"({cnt:,} cells, ~{pct:.0f}% of rows touched) before trusting forecasts."
+                )
+
+        dups = int(quality_report.get("duplicate_rows", 0) or 0)
+        if rows > 0 and dups > 0:
+            dpct = 100.0 * dups / rows
+            if dpct >= 0.5:
+                recs.append(
+                    f"Tighten ingestion or dedup rules — **{dups:,} duplicate rows** (~{dpct:.1f}%) can inflate totals and distort rankings."
+                )
+
+        anomalies = quality_report.get("anomalies") or []
+        if anomalies:
+            recs.append(
+                "Validate extreme values flagged as outliers with the owning team before excluding them from executive KPIs."
+            )
+
+        llm_recs: List[str] = []
+        if self.llm.enabled:
+            try:
+                raw = self.llm.chat_json(
+                    system_prompt='Return ONLY valid JSON: an array of 3 to 5 short actionable business recommendations.',
+                    user_payload={
+                        "insights_so_far": insights[:8],
+                        "quality_summary": quality_summary_text(quality_report) if quality_report else "",
+                        "task": "Recommendations must be specific (segments, regions, data fixes), not vague.",
+                    },
+                    temperature=0.35,
+                )
+                llm_recs = self._parse_string_list(raw) or []
+            except Exception:
+                llm_recs = []
+
+        templates = [
+            "Double down on the **top-performing segment** from the bar chart and replicate its playbook in weaker areas.",
+            "Set up a **simple monthly tracker** on the time-series metric so you catch slowdowns before quarter-end.",
+            "Align **sales and finance** on the worst missing-value columns so margin models stay defensible.",
+        ]
+
+        if len(llm_recs) >= 3:
+            merged = llm_recs[:5]
+        else:
+            merged = (llm_recs + recs + templates)[:8]
+
+        seen: set[str] = set()
+        out: List[str] = []
+        for r in merged:
+            if r and r not in seen:
+                seen.add(r)
+                out.append(r)
+        return out[:5]
 
     def reflect_and_refine(
         self,
