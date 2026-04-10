@@ -75,6 +75,9 @@ streamlit run app.py
 
 - With a valid key, the app uses Groq Chat Completions (`llama3-70b-8192` by default).
 - With `USE_LLM=false` or an invalid/placeholder key, the app still runs using **offline** planning and template insights.
+
 Connect with me at:
+
 Mail: moulyarb02@gmail.com
+
 LinkedIn: [Moulya R B](https://www.linkedin.com/in/moulyarb/)
