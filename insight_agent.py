@@ -74,12 +74,19 @@ class InsightAgent:
         analysis_summary: str,
         chart_descriptions: List[str],
         mode: str = "simple",
+        computed_highlights: Optional[List[str]] = None,
     ) -> List[str]:
         """
         4–6 bullets after CSV upload pipeline. Uses Groq when enabled, else rules.
         """
+        computed_highlights = computed_highlights or []
         fallback = self._pipeline_insights_fallback(
-            quality_report, clean_summary, analysis_summary, chart_descriptions, mode
+            quality_report,
+            clean_summary,
+            analysis_summary,
+            chart_descriptions,
+            mode,
+            computed_highlights=computed_highlights,
         )
         if not self.llm.enabled:
             return fallback[:6]
@@ -88,16 +95,25 @@ class InsightAgent:
                 "quality_summary": quality_summary_text(quality_report) if quality_report else "",
                 "cleaning": clean_summary,
                 "analysis": analysis_summary,
+                "computed_from_data": computed_highlights,
                 "charts": chart_descriptions,
                 "mode": mode,
                 "task": (
                     "Return ONLY a JSON array of 4 to 6 strings. "
-                    "Each string sounds like a real analyst (e.g. 'Revenue concentrates in …', 'West region is softening …'). "
-                    "No robotic status text. If mode is technical, add metrics and column names."
+                    "Each line must read like a senior analyst briefing a stakeholder: concrete, specific, "
+                    "use ~percentages or magnitudes when the supplied facts allow. "
+                    "FORBIDDEN phrases: 'successfully', 'generated', 'insights complete', 'analysis completed', "
+                    "'the dataset has been', 'this report'. "
+                    "GOOD examples: 'Electronics contributes ~42% of revenue', 'West region softened ~8% month over month', "
+                    "'Profit has heavy missingness in Q2 rows — treat averages cautiously'. "
+                    "If mode is technical, name columns and cite the stats you were given."
                 ),
             }
             raw = self.llm.chat_json(
-                system_prompt="You output valid JSON only: an array of strings.",
+                system_prompt=(
+                    "You output valid JSON only: an array of strings. "
+                    "No markdown, no numbering inside strings, no meta-commentary."
+                ),
                 user_payload=payload,
                 temperature=0.35,
             )
@@ -144,27 +160,41 @@ class InsightAgent:
         analysis_summary: str,
         chart_descriptions: List[str],
         mode: str,
+        *,
+        computed_highlights: Optional[List[str]] = None,
     ) -> List[str]:
         bullets: List[str] = []
+        for h in computed_highlights or []:
+            plain = re.sub(r"\*\*([^*]+)\*\*", r"\1", h).strip()
+            if len(plain) > 20:
+                bullets.append(plain)
         if quality_report:
-            bullets.append(quality_summary_text(quality_report))
+            qtxt = quality_summary_text(quality_report)
+            plain_q = re.sub(r"\*\*([^*]+)\*\*", r"\1", qtxt).strip()
+            bullets.append(
+                f"Data health snapshot: {plain_q[:320]}{'…' if len(plain_q) > 320 else ''}"
+            )
         if clean_summary:
             first = clean_summary.strip().split("\n")[0]
-            bullets.append(f"Cleaning applied: {first}")
+            plain = re.sub(r"\*\*([^*]+)\*\*", r"\1", first).strip()
+            if len(plain) > 15 and "as uploaded" not in plain.lower():
+                bullets.append(f"What changed in cleaning: {plain[:280]}")
         if analysis_summary:
             for line in analysis_summary.split("\n"):
                 line = line.strip()
                 if line.startswith("- ") and len(line) > 25:
                     bullets.append(line[2:].strip())
                 elif "correlation" in line.lower() and len(line) > 25:
-                    bullets.append(line)
+                    bullets.append(re.sub(r"\*\*([^*]+)\*\*", r"\1", line).strip())
         if chart_descriptions:
+            desc_plain = [
+                re.sub(r"\*\*([^*]+)\*\*", r"\1", d).strip() for d in chart_descriptions[:3]
+            ]
             bullets.append(
-                f"Auto-visualization: {len(chart_descriptions)} chart(s) — "
-                + "; ".join(chart_descriptions[:3])
+                f"Charts highlight: {'; '.join(desc_plain)}"
             )
         bullets.append(
-            "Next: use chat to ask for breakdowns by segment, time windows, or specific KPIs."
+            "Ask a follow-up in chat for a segment cut, time window, or KPI deep-dive."
         )
         if mode == "technical":
             bullets.append(
@@ -222,11 +252,18 @@ class InsightAgent:
         if self.llm.enabled:
             try:
                 raw = self.llm.chat_json(
-                    system_prompt='Return ONLY valid JSON: an array of 3 to 5 short actionable business recommendations.',
+                    system_prompt=(
+                        "Return ONLY valid JSON: an array of 3 to 5 short actionable business recommendations. "
+                        "Each starts with a strong verb (Focus, Investigate, Prioritize, Align, Monitor). "
+                        "No filler like 'consider analyzing' or 'it may be useful'."
+                    ),
                     user_payload={
                         "insights_so_far": insights[:8],
                         "quality_summary": quality_summary_text(quality_report) if quality_report else "",
-                        "task": "Recommendations must be specific (segments, regions, data fixes), not vague.",
+                        "task": (
+                            "Tie each recommendation to the insights or quality facts given "
+                            "(segments, missing columns, duplicates, outliers). Be specific."
+                        ),
                     },
                     temperature=0.35,
                 )

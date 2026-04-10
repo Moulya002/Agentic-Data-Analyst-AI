@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -67,19 +67,25 @@ class AgenticDataAnalyst:
         )
 
     def generate_automatic_insights(self) -> List[str]:
-        # Reuse multi-agent flow for autonomous analyst behavior.
-        response = self.run(
-            "Automatically analyze this dataset and provide 4-6 key business insights "
-            "covering trends, top categories/products, anomalies/missing data, and recommendations.",
-            explanation_mode="simple",
+        """
+        Insights without regenerating charts (for narrow code paths).
+        Prefer generate_insights_and_charts for upload / demo flows.
+        """
+        self.tools.ensure_data()
+        q = self.tools.data_quality_report()
+        analysis = self.tools.analysis_profile()
+        highlights = self.tools.quick_analyst_bullets()
+        return self.insight_agent.pipeline_insights(
+            quality_report=q.quality_report or {},
+            clean_summary=(
+                "No separate cleaning step in this path — use **Run full analysis** "
+                "for dedupe and imputation before trusting rolled-up KPIs."
+            ),
+            analysis_summary=analysis.text,
+            chart_descriptions=[],
+            mode="simple",
+            computed_highlights=highlights,
         )
-        lines = [line.strip("- ").strip() for line in response.refined_answer.splitlines() if line.strip()]
-        bullets = [
-            line
-            for line in lines
-            if len(line) > 20 and not line.lower().startswith("query:")
-        ][:6]
-        return bullets or [response.refined_answer]
 
     def generate_automatic_visualizations(self) -> List[ToolResult]:
         """
@@ -91,25 +97,75 @@ class AgenticDataAnalyst:
             logger.warning("Automatic visualization generation failed: %s", exc)
             return [ToolResult(text=f"Automatic visualization failed: {exc}")]
 
-    def generate_insights_and_charts(self, df: pd.DataFrame) -> tuple[List[str], List[ToolResult]]:
+    def generate_insights_and_charts(
+        self,
+        df: pd.DataFrame,
+        on_step: Optional[Callable[[str], None]] = None,
+    ) -> Tuple[List[str], List[ToolResult], Dict[str, object], Optional[pd.DataFrame]]:
         """
-        Required combined helper to produce both insights and charts.
-        Accepts df explicitly to keep function contract clear.
+        Quality scan → profile → charts → analyst-style insights (pipeline_insights).
+        Returns quality metadata so the UI avoids a duplicate quality pass.
         """
-        self.tools.df = df.copy()
-        insights = self.generate_automatic_insights()
-        charts = self.generate_automatic_visualizations()
-        return insights, charts
+        def step(msg: str) -> None:
+            if on_step is not None:
+                on_step(msg)
 
-    def run_full_analysis(self) -> Tuple[List[str], List[ToolResult], Dict[str, object], List[str]]:
-        """
-        One-click: clean → quality snapshot → auto insights → charts → business recommendations.
-        """
-        self.tools.ensure_data()
-        self.tools.clean_data()
+        self.tools.df = df.copy()
+        clean_summary = (
+            "Dataset is shown **as uploaded** (load does not auto-clean). "
+            "Click **Run full analysis** to dedupe and impute in one pass."
+        )
+        step("📋 Step 1 · Assessing data quality — missing cells, duplicates, outliers…")
         q = self.tools.data_quality_report()
-        insights = self.generate_automatic_insights()
+        step("🔎 Step 2 · Detecting patterns — numeric spreads and strongest correlations…")
+        analysis = self.tools.analysis_profile()
+        highlights = self.tools.quick_analyst_bullets()
+        step("📊 Step 3 · Creating visualizations…")
         charts = self.generate_automatic_visualizations()
+        chart_desc = [(c.text or "").replace("**", "").strip() for c in charts if c.text]
+        step("💡 Step 4 · Writing insights in plain analyst language…")
+        insights = self.insight_agent.pipeline_insights(
+            quality_report=q.quality_report or {},
+            clean_summary=clean_summary,
+            analysis_summary=analysis.text,
+            chart_descriptions=chart_desc,
+            mode="simple",
+            computed_highlights=highlights,
+        )
+        return insights, charts, q.quality_report or {}, q.table
+
+    def run_full_analysis(
+        self,
+        on_step: Optional[Callable[[str], None]] = None,
+    ) -> Tuple[List[str], List[ToolResult], Dict[str, object], List[str]]:
+        """
+        One-click: clean → quality snapshot → profile → charts → insights → recommendations.
+        """
+        def step(msg: str) -> None:
+            if on_step is not None:
+                on_step(msg)
+
+        self.tools.ensure_data()
+        step("🧹 Step 1 · Cleaning data — dedupe rows and fill missing values…")
+        clean_res = self.tools.clean_data()
+        step("📋 Step 2 · Recording data quality after cleaning…")
+        q = self.tools.data_quality_report()
+        step("🔎 Step 3 · Detecting patterns across columns…")
+        analysis = self.tools.analysis_profile()
+        highlights = self.tools.quick_analyst_bullets()
+        step("📊 Step 4 · Creating visualizations…")
+        charts = self.generate_automatic_visualizations()
+        chart_desc = [(c.text or "").replace("**", "").strip() for c in charts if c.text]
+        step("💡 Step 5 · Synthesizing insights…")
+        insights = self.insight_agent.pipeline_insights(
+            quality_report=q.quality_report or {},
+            clean_summary=clean_res.text,
+            analysis_summary=analysis.text,
+            chart_descriptions=chart_desc,
+            mode="simple",
+            computed_highlights=highlights,
+        )
+        step("📌 Step 6 · Drafting business recommendations…")
         recs = self.insight_agent.business_recommendations(insights, q.quality_report or {})
         return insights, charts, q.quality_report or {}, recs
 

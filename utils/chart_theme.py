@@ -24,7 +24,7 @@ def style_plotly_figure(
         fig.update_yaxes(title_text=y_title)
     fig.update_layout(
         template="plotly_dark",
-        height=400,
+        height=480,
         margin=dict(l=20, r=20, t=50, b=20),
         paper_bgcolor="#0e1117",
         plot_bgcolor="#161b22",

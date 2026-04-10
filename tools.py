@@ -178,6 +178,78 @@ class DataTools:
             raise ValueError("No dataset loaded. Upload a CSV first.")
         return self.df
 
+    def quick_analyst_bullets(self) -> List[str]:
+        """
+        Short, numeric highlights for offline insight fallbacks and LLM grounding.
+        """
+        df = self.ensure_data()
+        out: List[str] = []
+        rows = len(df)
+        if rows == 0:
+            return out
+
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        object_cols = [c for c in df.columns if c not in numeric_cols]
+
+        if object_cols and numeric_cols:
+            category_col = min(object_cols, key=lambda c: df[c].nunique(dropna=True))
+            metric_col = numeric_cols[0]
+            grouped = (
+                df.groupby(category_col, dropna=False)[metric_col]
+                .sum(min_count=1)
+                .dropna()
+                .sort_values(ascending=False)
+            )
+            if len(grouped) >= 1:
+                top_val = grouped.iloc[0]
+                total = grouped.sum()
+                if total and abs(float(total)) > 1e-9:
+                    pct = 100.0 * float(top_val) / float(total)
+                    top_label = str(grouped.index[0])
+                    out.append(
+                        f"In `{category_col}`, **{top_label}** drives about **{pct:.0f}%** of total `{metric_col}` "
+                        f"(share of summed `{metric_col}` across categories)."
+                    )
+
+        datetime_col = None
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                datetime_col = col
+                break
+            if df[col].dtype == object:
+                parsed = pd.to_datetime(df[col], errors="coerce")
+                if parsed.notna().mean() > 0.7:
+                    datetime_col = col
+                    break
+
+        if datetime_col and numeric_cols:
+            trend_col = numeric_cols[0]
+            tmp = df[[datetime_col, trend_col]].copy()
+            tmp[datetime_col] = pd.to_datetime(tmp[datetime_col], errors="coerce")
+            tmp = tmp.dropna(subset=[datetime_col, trend_col])
+            if len(tmp) >= 3:
+                monthly = tmp.groupby(tmp[datetime_col].dt.to_period("M"))[trend_col].mean()
+                if len(monthly) >= 2:
+                    last, prev = float(monthly.iloc[-1]), float(monthly.iloc[-2])
+                    if prev != 0 and not (np.isnan(last) or np.isnan(prev)):
+                        chg = 100.0 * (last - prev) / abs(prev)
+                        direction = "up" if chg > 1 else "down" if chg < -1 else "flat"
+                        out.append(
+                            f"Latest month for `{trend_col}` vs prior month is **{direction}** "
+                            f"(roughly **{chg:+.0f}%** change on a monthly average basis)."
+                        )
+
+        miss = df.isna().sum()
+        worst_cols = miss[miss > 0].sort_values(ascending=False).head(2)
+        if len(worst_cols) > 0:
+            parts = []
+            for col_name, cnt in worst_cols.items():
+                pct_r = 100.0 * int(cnt) / max(1, rows)
+                parts.append(f"`{col_name}` (~{pct_r:.0f}% of rows affected)")
+            out.append("Missing values are most visible in: " + ", ".join(parts) + " — worth cleaning before modeling.")
+
+        return out[:5]
+
     def summarize_dataset(self) -> ToolResult:
         df = self.ensure_data()
         summary = {

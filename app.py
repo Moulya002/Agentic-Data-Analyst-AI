@@ -141,7 +141,7 @@ with st.sidebar:
         else:
             st.error(f"Unavailable ({health.get('latency_ms')} ms): {health.get('error')}")
 
-st.subheader("Dataset")
+st.subheader("📂 Dataset")
 uploaded_files = st.file_uploader("Upload one or multiple CSV files", type=["csv"], accept_multiple_files=True)
 
 if uploaded_files:
@@ -155,17 +155,32 @@ if uploaded_files:
             st.session_state.join_suggestions = st.session_state.tools.suggest_join_candidates()
 
         st.success(load_result.text)
-        with st.spinner("Running auto insights and charts…"):
-            try:
-                st.session_state.auto_insights, st.session_state.auto_visuals = (
-                    st.session_state.agent.generate_insights_and_charts(st.session_state.tools.df)
+        try:
+            with st.status("🧠 Agent pipeline", expanded=True) as pipeline_status:
+
+                def _pipeline_step(msg: str) -> None:
+                    pipeline_status.write(msg)
+
+                insights, visuals, qr, qtab = st.session_state.agent.generate_insights_and_charts(
+                    st.session_state.tools.df,
+                    on_step=_pipeline_step,
                 )
-            except Exception as exc:
-                st.session_state.auto_insights = [
-                    f"Insight step hit an error (check `.env` / Groq). Detail: {exc}"
-                ]
-                st.session_state.auto_visuals = st.session_state.agent.generate_automatic_visualizations()
-                st.warning("Used rule-based fallbacks for this step; chat and charts may still run.")
+                st.session_state.auto_insights = insights
+                st.session_state.auto_visuals = visuals
+                st.session_state.quality_report = qr
+                st.session_state.quality_table = qtab
+                pipeline_status.write("📌 Mapping insights to business recommendations…")
+                st.session_state.business_recommendations = st.session_state.agent.business_recommendations(
+                    st.session_state.auto_insights,
+                    st.session_state.quality_report,
+                )
+                pipeline_status.update(label="✅ Load pipeline complete", state="complete", expanded=False)
+        except Exception as exc:
+            st.session_state.auto_insights = [
+                f"Pipeline step hit an error (check `.env` / Groq). Detail: {exc}"
+            ]
+            st.session_state.auto_visuals = st.session_state.agent.generate_automatic_visualizations()
+            st.warning("Used charts and rule-based fallbacks; chat may still run.")
             quality_result = st.session_state.tools.data_quality_report()
             st.session_state.quality_report = quality_result.quality_report or {}
             st.session_state.quality_table = quality_result.table
@@ -178,7 +193,7 @@ if uploaded_files:
 df = st.session_state.tools.df
 
 if df is not None:
-    st.markdown("### Dataset overview")
+    st.markdown("### 📋 Dataset overview")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Rows", f"{len(df):,}")
     c2.metric("Columns", len(df.columns))
@@ -188,21 +203,26 @@ if df is not None:
         st.dataframe(df.head(12), use_container_width=True)
 
     st.divider()
-    st.markdown("### One-click full analysis")
-    st.caption("Clean → refresh quality → regenerate insights & charts → refresh recommendations.")
-    if st.button("Run full analysis", type="primary", help="End-to-end pipeline on the loaded table"):
-        with st.spinner("Running full analysis pipeline…"):
-            try:
-                ins, charts, qr, recs = st.session_state.agent.run_full_analysis()
+    st.markdown("### 🚀 One-click full analysis")
+    st.caption("Clean → quality snapshot → patterns → charts → insights → recommendations (recruiter-friendly demo path).")
+    if st.button("🚀 Run full analysis", type="primary", help="End-to-end: clean, analyze, visualize, recommend"):
+        try:
+            with st.status("🧠 Full analysis pipeline", expanded=True) as full_status:
+
+                def _full_step(msg: str) -> None:
+                    full_status.write(msg)
+
+                ins, charts, qr, recs = st.session_state.agent.run_full_analysis(on_step=_full_step)
                 st.session_state.auto_insights = ins
                 st.session_state.auto_visuals = charts
                 st.session_state.quality_report = qr
                 qtab = st.session_state.tools.data_quality_report()
                 st.session_state.quality_table = qtab.table
                 st.session_state.business_recommendations = recs
-                st.success("Full analysis complete.")
-            except Exception as exc:
-                st.error(f"Full analysis failed: {exc}")
+                full_status.update(label="✅ Full analysis complete", state="complete", expanded=False)
+            st.success("Full analysis complete.")
+        except Exception as exc:
+            st.error(f"Full analysis failed: {exc}")
 
 if st.session_state.join_suggestions:
     st.subheader("Suggested cross-file joins")
@@ -229,7 +249,8 @@ if st.session_state.join_suggestions:
             st.dataframe(join_result.table, use_container_width=True)
 
 if st.session_state.quality_report or st.session_state.quality_table is not None:
-    st.markdown("### Data quality report")
+    st.divider()
+    st.markdown("### 🔎 Data quality report")
     if st.session_state.quality_table is not None:
         st.dataframe(st.session_state.quality_table, use_container_width=True, hide_index=True)
     st.markdown(quality_summary_text(st.session_state.quality_report or {}))
@@ -237,18 +258,22 @@ if st.session_state.quality_report or st.session_state.quality_table is not None
         st.json(st.session_state.quality_report)
 
 if st.session_state.auto_insights:
-    st.markdown("### Auto insights")
+    st.divider()
+    st.markdown("### 💡 Key insights")
+    st.caption("Written like an analyst briefing — not system logs.")
     for item in st.session_state.auto_insights[:8]:
         st.markdown(f"- {item}")
 
 if st.session_state.business_recommendations:
-    st.markdown("### Recommendations")
-    st.caption("Action items recruiters and stakeholders can act on.")
+    st.divider()
+    st.markdown("### 📌 Business recommendations")
+    st.caption("Decision-oriented next steps tied to the data above.")
     for rec in st.session_state.business_recommendations:
         st.markdown(f"- {rec}")
 
 if st.session_state.auto_visuals:
-    st.markdown("### Charts")
+    st.divider()
+    st.markdown("### 📊 Charts")
     for visual in st.session_state.auto_visuals:
         st.markdown(f"*{visual.text}*")
         if visual.plotly_fig is not None:
@@ -256,7 +281,7 @@ if st.session_state.auto_visuals:
 
 if df is not None:
     st.divider()
-    st.markdown("### Export")
+    st.markdown("### 📥 Export")
     exp1, exp2 = st.columns(2)
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     exp1.download_button(
@@ -274,7 +299,7 @@ if df is not None:
         mime="text/plain",
     )
 
-    st.markdown("### Chat with your data")
+    st.markdown("### 💬 Chat with your data")
     st.caption("Quick prompts — or type your own question below.")
     q1, q2, q3, q4 = st.columns(4)
     if q1.button("Clean data"):
